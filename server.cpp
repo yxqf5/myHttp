@@ -433,12 +433,88 @@ struct http_request_parser
         }
     }
 
-    std::string read_some_body() {
+    std::string read_some_body() {//
         return std::move(body());
     }
 
 
 };
+
+
+struct http11_header_writer
+{
+
+    std::string m_buffer;
+
+    void reset_state(){
+        m_buffer.clear();
+    }
+
+    std::string &buffer(){
+        return m_buffer;
+    }
+
+    void begin_header(std::string_view first,std::string_view second,std::string_view third){
+        m_buffer.append(first);
+        m_buffer.append(" ");
+        m_buffer.append(second);
+        m_buffer.append(" ");
+        m_buffer.append(third);
+    }
+
+    void write_header(std::string_view key,std::string_view value){
+        m_buffer.append("\r\n");
+        m_buffer.append(key);
+        m_buffer.append(": ");
+        m_buffer.append(value);
+    }
+
+    void end_header(){
+        m_buffer.append("\r\n\r\n");
+    }
+};
+
+
+
+template <class HeaderWriter =http11_header_writer>
+struct http_response_writer
+{
+    HeaderWriter m_header_writer;
+
+    void begin_header(std::string_view  first,std::string_view second,std::string_view third){
+        m_header_writer.begin_header(first,second,third);
+    }
+
+    void reset_state(){
+        m_header_writer.reset_state();
+    }
+
+    std::string & buffer(){
+        return m_header_writer.buffer();
+    }
+
+    void write_header(std::string_view key,std::string_view value){
+        m_header_writer.write_header(key,value);
+    }
+
+    void end_header(){
+        m_header_writer.end_header();
+
+    }
+
+    void write_body(std::string_view body){
+        m_header_writer.buffer().append(body);
+
+    }
+
+};
+
+
+
+
+
+
+
 
 
 
@@ -468,35 +544,81 @@ fmt::println("{}",str);
 
     socket_address_storage addr;
     int connid= CHECK_CALL(accept,listenfd,&addr.m_addr,&addr.m_addrlen);
+    fmt::println("the request of connection: {}",connid);
     pool.push_back(std::thread([connid]{//? 3
-        char buf[1024];
 
+        while(true){
+        char buf[1024];
         http_request_parser req_parser;
+
 
         do
         {
         size_t n=CHECK_CALL(read,connid,buf,sizeof(buf));
+
+        if (n==0)
+        {
+            fmt::println("主动关闭了连接: {}",connid);
+            goto quit;
+            /* code */
+        }
+        
+
+
         req_parser.push_chunk(std::string(buf,n));
         } while (!req_parser.header_finished());
+        fmt::println("the request: {}",connid);
         std::string body=req_parser.body();
-        fmt::println("the request header: {}",req_parser.header_raw());
-        fmt::println("the request body: {}",req_parser.body());
 
+        // fmt::println("the request header: {}",req_parser.header_raw());
+        // fmt::println("the request body: {}",req_parser.body());
+
+
+        //std::string body=req_parser.body();
         std::cout<<"---------------------------------------------------------------------------------"<<endl;
 
         // cout<<"收到的请求: "<<req_parser.m_header<<'\n';
         // cout<<"the request body: "<<req_parser.m_body<<'\n';
         // std::string body=req_parser.m_body;
-
-
         // size_t n = CHECK_CALL(read, connid, buf, sizeof(buf));
         // std::string req(buf, n);
         // cout << "the req : " << req << "\n";
 
-         std::string body1="nihao,yxqf!";
-        std::string res="HTTP/1.1 200 OK\r\nServer: co_http\r\nConnection: close\r\nContent-length: "+std::to_string((size_t)9+body1.size())+"\r\n\r\nHelloword"+body1;
-         cout<<"我的回答: "<<res<<'\n';
-         CHECK_CALL(write,connid,res.data(),res.size());
+        if (body.empty())
+        {
+            body="the body is null";
+            /* code */
+        }
+        else{
+            body="hello! you request is: [ "+body+" ]";
+        }
+        
+
+
+        fmt::println("正在响应请求: {}",connid);
+
+        http_response_writer res_writer;
+        res_writer.begin_header("HTTP/1.1","200","OK");
+        res_writer.write_header("Server","co_http");
+        res_writer.write_header("Content-type","text/html;charset=utf-8");
+        res_writer.write_header("Connection","keep-alive");
+        res_writer.write_header("COntent-length",std::to_string(body.size()));
+        res_writer.end_header();
+        auto body1 = res_writer.buffer();
+        CHECK_CALL(write,connid,body1.data(),body1.size());
+        //res_writer.write_body(body);
+         CHECK_CALL(write,connid,body.data(),body.size());
+    }
+
+
+
+
+         //std::string body1="nihao,yxqf!";
+        //std::string res="HTTP/1.1 200 OK\r\nServer: co_http\r\nConnection: close\r\nContent-length: "+std::to_string((size_t)9+body1.size())+"\r\n\r\nHelloword"+body1;
+         //cout<<"我的回答: "<<res<<'\n';
+        // CHECK_CALL(write,connid,res.data(),res.size());
+        quit:
+        fmt::println("连接关闭: {}",connid);
         close(connid);
     }));
     }
